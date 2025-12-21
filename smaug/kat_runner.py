@@ -132,8 +132,23 @@ def run_rsp(rsp_path: Path, max_cases: int | None = None) -> int:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: kat_runner.py <path-to-rsp> [max_cases]")
-        return 2
+        # Run all KATs if no specific RSP provided
+        kat_dir = Path(__file__).parent.parent / "KAT"
+        rsp_files = list(kat_dir.glob("**/PQCkemKAT_*.rsp"))
+        if not rsp_files:
+            print("No RSP files found in KAT directory")
+            return 2
+        total_failures = 0
+        for rsp in rsp_files:
+            print(f"Running KAT for {rsp.parent.name}")
+            failures = run_rsp(rsp)
+            if failures > 0:
+                print(f"FAIL for {rsp.parent.name} ({failures})")
+                total_failures += failures
+            else:
+                print(f"OK for {rsp.parent.name}")
+        print("Overall: OK" if total_failures == 0 else f"Overall: FAIL ({total_failures})")
+        return 0 if total_failures == 0 else 1
     rsp = Path(argv[1])
     max_cases = int(argv[2]) if len(argv) >= 3 else None
     failures = run_rsp(rsp, max_cases=max_cases)
