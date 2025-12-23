@@ -82,8 +82,8 @@ PARAM_SETS: dict[str, SmaugParamSet] = {
         p=256,
         p_prime=256,
         t=2,
-        hs=198,
-        hr=151,
+        hs=150,
+        hr=147,
         sigma=1.453713,
     ),
     "SMAUG-256-KAT": SmaugParamSet(
@@ -94,8 +94,8 @@ PARAM_SETS: dict[str, SmaugParamSet] = {
         p=256,
         p_prime=256,
         t=2,
-        hs=176,
-        hr=160,
+        hs=145,
+        hr=140,
         sigma=1.0625,
     ),
     "TOY-NOISELESS": SmaugParamSet(

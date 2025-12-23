@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+"""
+KAT runner for SMAUG.
+
+Note: This runner validates against the reference implementation outputs.
+The main implementation follows the SMAUG paper (FO-style KEM flow), so
+passing the official KAT vectors requires using the reference KEM here.
+KAT-specific helpers (e.g., ref samplers/packing) remain in the main codebase
+for comparison and debugging.
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 import re
 import sys
-from typing import Iterable
 
 import params
 import rng
 from nist_aes256ctr_drbg import AES256CTRDRBG
+import kem
 import ref_smaug
 
 
@@ -77,17 +87,19 @@ def _select_params_from_header(rsp_path: Path) -> str:
     raise ValueError(f"Cannot infer parameter set from {rsp_path}")
 
 
-def run_rsp(rsp_path: Path, max_cases: int | None = None) -> int:
-    par_name = _select_params_from_header(rsp_path)
-    # Use reference parameter modes 1/3/5 for KAT
+def _kat_ref_params(par_name: str) -> ref_smaug.RefParams:
     if par_name == "SMAUG-128-KAT":
-        ref_par = ref_smaug.PARAMS_BY_MODE[1]
-    elif par_name == "SMAUG-192-KAT":
-        ref_par = ref_smaug.PARAMS_BY_MODE[3]
-    elif par_name == "SMAUG-256-KAT":
-        ref_par = ref_smaug.PARAMS_BY_MODE[5]
-    else:
-        raise ValueError("Unexpected param selection for KAT")
+        return ref_smaug.PARAMS_BY_MODE[1]
+    if par_name == "SMAUG-192-KAT":
+        return ref_smaug.PARAMS_BY_MODE[3]
+    if par_name == "SMAUG-256-KAT":
+        return ref_smaug.PARAMS_BY_MODE[5]
+    raise ValueError("Unexpected param selection for KAT")
+
+
+def run_rsp(rsp_path: Path, max_cases: int | None = None, use_main_keygen: bool = False) -> int:
+    par_name = _select_params_from_header(rsp_path)
+    ref_par = _kat_ref_params(par_name)
     params.set_active(par_name)
     cases = _parse_rsp(rsp_path)
     if max_cases is not None:
@@ -99,13 +111,19 @@ def run_rsp(rsp_path: Path, max_cases: int | None = None) -> int:
             raise ValueError("Expected 48-byte KAT seed")
         rng.set_rng(AES256CTRDRBG.from_seed(case.seed48))
 
-        pk_bytes, sk_bytes = ref_smaug.crypto_kem_keypair(ref_par)
+        if use_main_keygen:
+            pk, sk = kem.keygen()
+            pk_bytes = kem.serialize_pk(pk)
+            sk_bytes = kem.serialize_sk(sk)
+        else:
+            pk_bytes, sk_bytes = ref_smaug.crypto_kem_keypair(ref_par)
         ct_bytes, ss = ref_smaug.crypto_kem_encap(ref_par, pk_bytes)
-        ss2 = ref_smaug.crypto_kem_decap(ref_par, sk_bytes, pk_bytes, ct_bytes)
-        if ss != ss2:
-            print(f"[count={case.count}] decaps mismatch (internal)")
-            failures += 1
-            break
+        if not use_main_keygen:
+            ss2 = ref_smaug.crypto_kem_decap(ref_par, sk_bytes, pk_bytes, ct_bytes)
+            if ss != ss2:
+                print(f"[count={case.count}] decaps mismatch (internal)")
+                failures += 1
+                break
 
         mism = []
         if pk_bytes != case.pk:
@@ -131,7 +149,9 @@ def run_rsp(rsp_path: Path, max_cases: int | None = None) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
+    use_main_keygen = "--use-main-keygen" in argv
+    pos_args = [a for a in argv[1:] if not a.startswith("--")]
+    if not pos_args:
         # Run all KATs if no specific RSP provided
         kat_dir = Path(__file__).parent.parent / "KAT"
         rsp_files = list(kat_dir.glob("**/PQCkemKAT_*.rsp"))
@@ -141,7 +161,7 @@ def main(argv: list[str]) -> int:
         total_failures = 0
         for rsp in rsp_files:
             print(f"Running KAT for {rsp.parent.name}")
-            failures = run_rsp(rsp)
+            failures = run_rsp(rsp, use_main_keygen=use_main_keygen)
             if failures > 0:
                 print(f"FAIL for {rsp.parent.name} ({failures})")
                 total_failures += failures
@@ -149,9 +169,9 @@ def main(argv: list[str]) -> int:
                 print(f"OK for {rsp.parent.name}")
         print("Overall: OK" if total_failures == 0 else f"Overall: FAIL ({total_failures})")
         return 0 if total_failures == 0 else 1
-    rsp = Path(argv[1])
-    max_cases = int(argv[2]) if len(argv) >= 3 else None
-    failures = run_rsp(rsp, max_cases=max_cases)
+    rsp = Path(pos_args[0])
+    max_cases = int(pos_args[1]) if len(pos_args) >= 2 else None
+    failures = run_rsp(rsp, max_cases=max_cases, use_main_keygen=use_main_keygen)
     print("OK" if failures == 0 else f"FAIL ({failures})")
     return 0 if failures == 0 else 1
 

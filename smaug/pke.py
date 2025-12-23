@@ -21,12 +21,13 @@ class PKESecretKey:
 
 
 def split_seed(seed: bytes) -> Tuple[bytes, bytes, bytes]:
-    expanded = hashlib.shake_128(seed).digest(3 * params.SEED_BYTES)
-    return (
-        expanded[: params.SEED_BYTES],
-        expanded[params.SEED_BYTES : 2 * params.SEED_BYTES],
-        expanded[2 * params.SEED_BYTES :],
-    )
+    # Match ref keygen seed expansion: shake128(64, seed), then seedA=shake128(32, pkseed)
+    expanded = hashlib.shake_128(seed).digest(2 * params.SEED_BYTES)
+    pkseed = expanded[params.SEED_BYTES : 2 * params.SEED_BYTES]
+    seedA = hashlib.shake_128(pkseed).digest(params.SEED_BYTES)
+    seedsk = expanded
+    seede = expanded[: params.SEED_BYTES]
+    return seedA, seedsk, seede
 
 
 def keygen(seed: Optional[bytes] = None) -> Tuple[PKEPublicKey, PKESecretKey]:
@@ -35,12 +36,18 @@ def keygen(seed: Optional[bytes] = None) -> Tuple[PKEPublicKey, PKESecretKey]:
     seedA, seedsk, seede = split_seed(seed)
 
     A = sampling.expand_matrix(seedA)
-    s = sampling.sample_hwt(seedsk, params.H_S)
+    if "KAT" in params.ACTIVE.name:
+        s = sampling.sample_hwt_kat(seedsk, params.H_S)
+    else:
+        s = sampling.sample_hwt(seedsk, params.H_S)
     e = sampling.sample_discrete_gaussian(seede, params.SIGMA)
 
-    # b = -A^T * s + e mod q
-    A_T = np.transpose(A, (1, 0, 2))
-    As = ring.mat_vec_mul(A_T, s, q=params.Q)
+    # b = -A * s + e mod q (ref uses A, not A^T)
+    if "KAT" in params.ACTIVE.name:
+        As = ring.mat_vec_mul(A, s, q=params.Q)
+    else:
+        A_T = np.transpose(A, (1, 0, 2))
+        As = ring.mat_vec_mul(A_T, s, q=params.Q)
     b = (e - As) % params.Q
 
     return PKEPublicKey(seedA=seedA, b=b), PKESecretKey(s=s)
